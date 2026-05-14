@@ -268,42 +268,105 @@ function stopSpk(){
   document.querySelectorAll('.sentence.reading').forEach(el=>el.classList.remove('reading'));
 }
 
+let mp3AudioEl = null; // 当前MP3音频元素
+
 function readSentenceBySentence(article){
   if(!article)return;
-  stopSpk();
+  const mp3Url = 'https://huiruzhang04-commits.github.io/english-checkin/audio/article_'+String(article.id).padStart(2,'0')+'.mp3';
   const sents=article.text.split(/(?<=[.!?])\s+/).filter(s=>s.trim());
   if(sents.length===0)return;
+
+  // 停止之前的语音和音频
+  stopSpk();
+  if(mp3AudioEl){mp3AudioEl.pause();mp3AudioEl=null;}
+
+  document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading','done'));
   currentReadingSentenceIdx=0;
   isReading=true;
 
-  // 显示进度
-  document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading','done'));
+  // 计算每句话的单词数和总单词数，用于估算时间
+  const sentWords = sents.map(s=>s.trim().split(/\s+/).length);
+  const totalWords = sentWords.reduce((a,b)=>a+b,0);
 
-  function readNext(idx){
-    if(idx>=sents.length){
+  // 创建音频元素
+  mp3AudioEl = new Audio(mp3Url);
+  mp3AudioEl.playbackRate = readingSpeed; // 应用速度设置
+  let alreadyEnded = false;
+
+  mp3AudioEl.oncanplay = ()=>{
+    const totalDur = mp3AudioEl.duration;
+    // 根据单词数分配每句话的时间
+    let cumWords = 0;
+    const sentEndTimes = sents.map((_,i)=>{
+      const ratio = sentWords[i]/totalWords;
+      cumWords += sentWords[i];
+      // 句子结束时点 = 总时长 * (累计词数/总词数)
+      return totalDur * (cumWords/totalWords);
+    });
+    const sentStartTimes = [0, ...sentEndTimes.slice(0,-1)];
+
+    function updateHighlight(curTime){
+      let idx = 0;
+      for(let i=0;i<sents.length;i++){
+        if(curTime >= sentStartTimes[i]) idx=i;
+        else break;
+      }
+      if(idx !== currentReadingSentenceIdx){
+        document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading'));
+        const sentEls = document.querySelectorAll('.sentence');
+        if(sentEls[idx]){
+          sentEls[idx].classList.add('reading');
+          sentEls[idx].scrollIntoView({behavior:'smooth',block:'center'});
+          // 标记已读过的句子
+          for(let i=0;i<idx;i++)sentEls[i].classList.add('done');
+        }
+        currentReadingSentenceIdx = idx;
+      }
+    }
+
+    mp3AudioEl.onplay = ()=>{isReading=true;};
+    mp3AudioEl.onpause = ()=>{isReading=false;};
+    mp3AudioEl.ontimeupdate = ()=>{updateHighlight(mp3AudioEl.currentTime);};
+    mp3AudioEl.onended = ()=>{
+      if(alreadyEnded)return;
+      alreadyEnded=true;
       isReading=false;
       currentReadingSentenceIdx=-1;
       document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading'));
+      document.querySelectorAll('.sentence').forEach(el=>el.classList.add('done'));
+      mp3AudioEl=null;
+    };
+    mp3AudioEl.play().catch(()=>{
+      // MP3加载失败时降级到浏览器语音
+      fallbackToBrowserTTS(sents);
+    });
+  };
+
+  mp3AudioEl.onerror = ()=>{
+    // MP3加载失败时降级到浏览器语音
+    mp3AudioEl=null;
+    fallbackToBrowserTTS(sents);
+  };
+}
+
+// 降级方案：使用浏览器语音
+function fallbackToBrowserTTS(sents){
+  document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading','done'));
+  isReading=true;
+  currentReadingSentenceIdx=0;
+  function readNext(idx){
+    if(idx>=sents.length){
+      isReading=false;currentReadingSentenceIdx=-1;
+      document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading'));
       return;
     }
-    const sent=sents[idx];
-    // 高亮当前句
     document.querySelectorAll('.sentence').forEach(el=>el.classList.remove('reading'));
     const sentEls=document.querySelectorAll('.sentence');
-    if(sentEls[idx]){
-      sentEls[idx].classList.add('reading');
-      sentEls[idx].scrollIntoView({behavior:'smooth',block:'center'});
-    }
+    if(sentEls[idx]){sentEls[idx].classList.add('reading');sentEls[idx].scrollIntoView({behavior:'smooth',block:'center'});}
     currentReadingSentenceIdx=idx;
-
-    const u=new SpeechSynthesisUtterance(sent);
-    u.lang='en-US';
-    u.voice=currentTTSVoice;
-    u.rate=readingSpeed;
-    u.onend=()=>{
-      if(sentEls[idx])sentEls[idx].classList.add('done');
-      setTimeout(()=>readNext(idx+1),200); // 200ms自然停顿
-    };
+    const u=new SpeechSynthesisUtterance(sents[idx]);
+    u.lang='en-US';u.voice=currentTTSVoice;u.rate=readingSpeed;
+    u.onend=()=>{if(sentEls[idx])sentEls[idx].classList.add('done');setTimeout(()=>readNext(idx+1),200);};
     window.speechSynthesis.speak(u);
   }
   readNext(0);
@@ -472,7 +535,7 @@ function renderToday(aid){
   }
 
   h+='<div class="controls-bar">';
-  h+='<button class="control-btn btn-primary" onclick="readFull(ARTICLES.find(x=>x.id===currentArticleId))">📖 逐句朗读</button>';
+  h+='<button class="control-btn btn-primary" onclick="readFull(ARTICLES.find(x=>x.id===currentArticleId))">🔊 高品质朗读</button>';
   h+='<button class="control-btn btn-secondary" onclick="stopSpk()">⏹ 停止</button>';
   h+='<select class="voice-select" style="width:auto;padding:8px" onchange="changeSpeed(this.value)">';
   h+='<option value="0.7">🐢 慢速</option>';
